@@ -201,7 +201,7 @@ def log_tx(action, set_name, player_name, def_id, buy_price, sell_price, status)
             action, set_name, player_name, def_id, buy_price, sell_price, status
         ])
 
-def sleep_human(min_s=3.5, max_s=6.5):
+def sleep_human(min_s=1.5, max_s=3.0):
     d = round(random.uniform(min_s, max_s), 2)
     time.sleep(d)
 
@@ -292,7 +292,7 @@ def execute_buy_and_flip_cycle(tab_id, set_info, max_buy=750, endpoint=DEFAULT_E
         return {"success": True, "alreadyComplete": True}
 
     # 2. Buscar candidatos en mercado con Buy Now <= max_buy
-    sleep_human(3.5, 6.0)
+    sleep_human(1.2, 2.2)
     search_code = f"""
     (async () => {{
       services.Item.clearTransferMarketCache();
@@ -346,7 +346,7 @@ def execute_buy_and_flip_cycle(tab_id, set_info, max_buy=750, endpoint=DEFAULT_E
     
     if not candidates:
         log(f"Sin cartas disponibles <= {max_buy} en este momento para {set_name}.")
-        return {"success": True, "candidatesFound": 0}
+        return {"success": True, "candidatesFound": 0, "noStock": True}
         
     # Comprar la opción más barata disponible
     candidates.sort(key=lambda c: c["buyNow"])
@@ -354,7 +354,7 @@ def execute_buy_and_flip_cycle(tab_id, set_info, max_buy=750, endpoint=DEFAULT_E
     log(f"Comprando carta más barata: {target['name']} (OVR {target['rating']}, DefId: {target['defId']}) por {target['buyNow']} monedas")
     
     # 3. Comprar usando la entidad nativa
-    sleep_human(2.5, 4.5)
+    sleep_human(1.2, 2.2)
     buy_code = f"""
     (async () => {{
       const candidate = (window._rkCandidates || []).find(i => i.id === {target['id']});
@@ -487,7 +487,8 @@ def run_loop(tab_id, max_rounds=30, max_spend=15000, min_coins_buffer=35000, max
     log(f"Saldo inicial: {initial_coins:,} monedas. Piso mínimo protegido: {floor_coins:,} monedas (Límite gasto: {max_spend:,}).")
     
     rounds_done = 0
-    consecutive_searches = 0
+    active_queries = 0
+    set_cooldowns = {} # setId -> timestamp
     
     # Cobro inicial de ventas y objetivos
     recover_market_coins_and_auctions(tab_id, endpoint=endpoint)
@@ -498,7 +499,7 @@ def run_loop(tab_id, max_rounds=30, max_spend=15000, min_coins_buffer=35000, max
         coins = get_coins(tab_id, endpoint=endpoint)
         m_state = recover_market_coins_and_auctions(tab_id, endpoint=endpoint)
         
-        log(f"\n--- RONDA {rounds_done + 1}/{max_rounds} | Saldo: {coins:,} monedas (Piso: {floor_coins:,}) | Subastas Activas: {m_state['active']} ---")
+        log(f"\n--- CICLO DE BÚSQUEDA | Compras: {rounds_done}/{max_rounds} | Saldo: {coins:,} monedas (Piso: {floor_coins:,}) | Subastas Activas: {m_state['active']} ---")
         
         if coins < floor_coins:
             now = time.time()
@@ -509,50 +510,65 @@ def run_loop(tab_id, max_rounds=30, max_spend=15000, min_coins_buffer=35000, max
             time.sleep(60)
             continue
             
-        action_performed = False
+        action_in_pass = False
         for target_set in valid_sets:
+            if rounds_done >= max_rounds:
+                break
+                
+            s_id = target_set["setId"]
             req = target_set.get("required", 15)
             tr = target_set.get("trackedCount", 0)
+            
             if tr >= req:
                 continue
                 
-            res = execute_buy_and_flip_cycle(tab_id, target_set, max_buy=max_buy_price, endpoint=endpoint)
-            consecutive_searches += 1
+            # Salto instantáneo si el set no tenía stock recientemente
+            now = time.time()
+            if s_id in set_cooldowns and now < set_cooldowns[s_id]:
+                continue
+                
+            rem = req - tr
+            # Si le faltan 1 o 2 cartas para cerrarlo al 100%, permitir hasta 1,100 monedas
+            dynamic_max_buy = 1100 if rem <= 2 else max_buy_price
             
-            if res.get("success") and res.get("player"):
+            res = execute_buy_and_flip_cycle(tab_id, target_set, max_buy=dynamic_max_buy, endpoint=endpoint)
+            active_queries += 1
+            
+            if res.get("noStock"):
+                # Enfriar este set por 15 minutos para no repetir búsquedas vacías
+                set_cooldowns[s_id] = time.time() + 900
+                time.sleep(1.0)
+            elif res.get("success") and res.get("player"):
                 rounds_done += 1
                 target_set["trackedCount"] = tr + 1
-                action_performed = True
+                action_in_pass = True
                 
-                # Cobrar ventas inmediatamente
+                # Cobro inmediato de ventas
                 recover_market_coins_and_auctions(tab_id, endpoint=endpoint)
                 
-                log("Pausa de seguridad humana (8s) antes del siguiente objetivo...")
-                time.sleep(8)
-                break
-            elif res.get("marketError"):
-                log("Enfriando mercado por 45s ante aviso de API...")
-                time.sleep(45)
-                break
-            else:
+                log(f"Compra exitosa #{rounds_done}. Pausa ágil (4s) antes de pasar al siguiente equipo...")
                 time.sleep(4.0)
                 
-            # Cada 6 búsquedas, enfriar 35s
-            if consecutive_searches % 6 == 0:
-                log("Enfriamiento preventivo anti-ban (35 segundos)...")
-                time.sleep(35)
+                # Pausa de lote cada 4 compras
+                if rounds_done % 4 == 0:
+                    log("Pausa de lote (25 segundos)... Reclamando objetivos y ventas...")
+                    recover_market_coins_and_auctions(tab_id, endpoint=endpoint)
+                    auto_claim_rewards(tab_id, endpoint=endpoint)
+                    time.sleep(25)
+            elif res.get("marketError"):
+                log("Aviso de API en mercado. Pausando 30s...")
+                time.sleep(30)
+            else:
+                time.sleep(2.0)
                 
-        # Pausa de lote cada 3 compras exitosas
-        if rounds_done > 0 and rounds_done % 3 == 0:
-            log("Pausa de enfriamiento de lote (40 segundos)... Reclamando objetivos y ventas...")
-            recover_market_coins_and_auctions(tab_id, endpoint=endpoint)
-            auto_claim_rewards(tab_id, endpoint=endpoint)
-            time.sleep(40)
-            
-        if not action_performed and consecutive_searches >= len(valid_sets):
-            log("Se recorrieron los sets candidatos y no hay cartas baratas disponibles en este momento. Pausando 60s...")
-            time.sleep(60)
-            consecutive_searches = 0
+            # Anti-ban preventivo cada 8 consultas reales al mercado
+            if active_queries % 8 == 0:
+                log("Enfriamiento preventivo anti-ban (25 segundos)...")
+                time.sleep(25)
+                
+        if not action_in_pass:
+            log("Ronda completa de candidatos procesada. Pausando 30s antes de la siguiente pasada...")
+            time.sleep(30)
             
     # Cobro final
     recover_market_coins_and_auctions(tab_id, endpoint=endpoint)
