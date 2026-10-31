@@ -254,7 +254,8 @@ def execute_buy_and_flip_cycle(tab_id, set_info, max_buy=750, endpoint=DEFAULT_E
         
     missing_ids = missing_data.get("missingDefIds", [])
     tracked = missing_data.get("trackedCount", 0)
-    req = missing_data.get("required", 15)
+    req = missing_data.get("required") or set_info.get("required", 15)
+    set_info["trackedCount"] = tracked
     log(f"Set '{set_name}': {tracked}/{req} completados. {len(missing_ids)} variantes faltantes.")
     
     if tracked >= req:
