@@ -129,18 +129,20 @@ def recover_market_coins_and_auctions(tab_id, endpoint=DEFAULT_ENDPOINT):
       
       // 2. Relistar subastas expiradas
       try {
-        const rRes = await new Promise(res => {
-          services.Item.relistExpiredAuctions().observe({}, (s, r) => res(r));
-        });
-        if (rRes && rRes.data && rRes.data.itemIds) {
-          relistedCount = rRes.data.itemIds.length;
+        await new Promise(r => services.Item.requestTransferItems().observe({}, () => r()));
+        const items = Object.values(repositories.Item.transfer._collection || {});
+        const expired = items.filter(i => i._auction && i._auction.tradeState === 'expired');
+        for (const it of expired) {
+          const bid = it._auction.startingBid || 300;
+          const buy = it._auction.buyNowPrice || 350;
+          const lRes = await new Promise(r => services.Item.list(it, bid, buy, 3600).observe({}, (s, res) => r(res)));
+          if (lRes && lRes.success) relistedCount++;
         }
       } catch(e) {}
       
       // 3. Estado de la lista de transferibles
       let activeCount = 0;
       try {
-        await new Promise(r => services.Item.requestTransferItems().observe({}, () => r()));
         const items = Object.values(repositories.Item.transfer._collection || {});
         activeCount = items.filter(i => i._auction && i._auction.tradeState === 'active').length;
       } catch(e) {}
@@ -203,7 +205,34 @@ def sleep_human(min_s=3.5, max_s=6.5):
     d = round(random.uniform(min_s, max_s), 2)
     time.sleep(d)
 
+def ensure_gallery_view(tab_id, endpoint=DEFAULT_ENDPOINT):
+    code = """
+    (() => {
+      const c = getAppMain()._rootViewController.currentController;
+      if (!c) return { status: 'no_app' };
+      const sub0 = c.childViewControllers ? c.childViewControllers[0] : null;
+      const activeVC = sub0 ? sub0.currentController : null;
+      if (activeVC && activeVC.className === '_0x42b2b1') {
+        return { status: 'ready' };
+      }
+      const tile = document.querySelector('.ut-tile-gallery');
+      if (tile) {
+        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(t => {
+          tile.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
+        });
+        return { status: 'clicked' };
+      }
+      return { status: 'no_tile' };
+    })()
+    """
+    res = eval_js(code, tab_id, endpoint=endpoint, timeout=10)
+    st = res.get("result", {}).get("status")
+    if st == "clicked":
+        time.sleep(1.2)
+    return True
+
 def execute_buy_and_flip_cycle(tab_id, set_info, max_buy=750, endpoint=DEFAULT_ENDPOINT):
+    ensure_gallery_view(tab_id, endpoint=endpoint)
     set_id = set_info["setId"]
     set_name = set_info["setName"]
     cat_id = set_info["catId"]

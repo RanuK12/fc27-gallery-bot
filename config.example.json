@@ -5,7 +5,7 @@
   },
   "trading": {
     "maxBuyPrice": 750,
-    "minCoinsBuffer": 35000,
+    "minCoinsBuffer": 15000,
     "relistMarkup": 50,
     "defaultAuctionDurationSeconds": 3600,
     "protectedPlayers": ["yamal", "lamine", "messi", "mbappe", "vinicius", "bellingham"]
