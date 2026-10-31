@@ -63,6 +63,7 @@ CONFIG = load_config()
 DEFAULT_ENDPOINT = os.getenv("RANUKITA_EXT_ENDPOINT", CONFIG.get("bridge", {}).get("endpoint", "http://127.0.0.1:9224/command"))
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", CONFIG.get("notifications", {}).get("telegram", {}).get("botToken", ""))
 TG_CHAT = os.getenv("TELEGRAM_CHAT_ID", str(CONFIG.get("notifications", {}).get("telegram", {}).get("chatId", "")))
+PROTECTED_PLAYERS = [p.lower() for p in CONFIG.get("trading", {}).get("protectedPlayers", ["yamal", "lamine", "messi", "mbappe", "vinicius", "bellingham", "rodri", "haaland", "valverde"])]
 
 def log(msg):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -163,13 +164,16 @@ def recover_market_coins_and_auctions(tab_id, endpoint=DEFAULT_ENDPOINT):
 def auto_claim_rewards(tab_id, endpoint=DEFAULT_ENDPOINT):
     code = """
     (async () => {
-      const results = {};
+      const results = { claimedCount: 0 };
       try {
         if (services.Objectives && services.Objectives.isObjectivesClaimAllEnabled()) {
           const res = await new Promise(r => {
             services.Objectives.claimMetaUTRewards().observe({}, (s, resp) => r(resp));
           });
-          results.claimedObjectives = res.success;
+          if (res && res.success && res.data) {
+            const count = (res.data.items || res.data.rewards || []).length;
+            results.claimedCount = count;
+          }
         }
       } catch(e) {
         results.objectivesError = e.toString();
@@ -179,9 +183,9 @@ def auto_claim_rewards(tab_id, endpoint=DEFAULT_ENDPOINT):
     """
     res = eval_js(code, tab_id, endpoint=endpoint, timeout=15)
     data = res.get("result") or {}
-    if data.get("claimedObjectives"):
-        log("RECOMPENSAS DE OBJETIVOS RECLAMADAS AUTOMÁTICAMENTE.")
-        send_telegram_alert("🎁 *¡Recompensas de Hito/Objetivos Reclamadas!* Se reclamaron recompensas pendientes en el club.")
+    claimed = data.get("claimedCount", 0)
+    if claimed > 0:
+        log(f"RECOMPENSAS DE OBJETIVOS: Se reclamaron {claimed} recompensa(s) en el club.")
     return data
 
 def log_tx(action, set_name, player_name, def_id, buy_price, sell_price, status):
@@ -343,6 +347,22 @@ def execute_buy_and_flip_cycle(tab_id, set_info, max_buy=750, endpoint=DEFAULT_E
     log_tx("BUY", set_name, target["name"], target["defId"], target["buyNow"], 0, "BOUGHT")
     
     # 4. Estampado en Club y Relistado Inmediato a Mercado
+    # PROTECCIÓN ABSOLUTA: Si es Yamal o cualquier carta que el usuario quiera conservar, jamás vender
+    if any(p in target["name"].lower() for p in PROTECTED_PLAYERS):
+        log(f"ESCUDO DE SEGURIDAD: {target['name']} es una carta protegida. Se estampa en el Club y NUNCA se vende.")
+        stamp_only_code = f"""
+        (async () => {{
+          const unassigned = Object.values(repositories.Item.unassigned._collection || {{}});
+          const targetItem = unassigned.find(i => i.definitionId === {target['defId']});
+          if (!targetItem) return {{ success: false, error: 'not in unassigned' }};
+          const toClub = await new Promise(r => services.Item.move(targetItem, ItemPile.CLUB).observe({{}}, (s, res) => r(res)));
+          return {{ toClub: toClub.success }};
+        }})()
+        """
+        eval_js(stamp_only_code, tab_id, endpoint=endpoint, timeout=15)
+        log_tx("STAMP_KEEP", set_name, target["name"], target["defId"], target["buyNow"], 0, "KEPT_IN_CLUB")
+        return {"success": True, "player": target["name"], "price": target["buyNow"], "protected": True}
+
     sleep_human(2.5, 4.0)
     list_price = target["buyNow"] + 50 if target["buyNow"] >= 450 else 300
     start_bid = target["buyNow"] if target["buyNow"] >= 450 else 200
@@ -352,6 +372,12 @@ def execute_buy_and_flip_cycle(tab_id, set_info, max_buy=750, endpoint=DEFAULT_E
       const unassigned = Object.values(repositories.Item.unassigned._collection || {{}});
       const targetItem = unassigned.find(i => i.definitionId === {target['defId']});
       if (!targetItem) return {{ success: false, error: 'not in unassigned' }};
+      
+      // PROTECCIÓN DE SEGURIDAD: Nunca vender cartas intransferibles o especiales
+      if (targetItem.untradeable) {{
+        await new Promise(r => services.Item.move(targetItem, ItemPile.CLUB).observe({{}}, (s, res) => r(res)));
+        return {{ toClub: true, listed: false, protected: true }};
+      }}
       
       // 1. Estampar en Club
       const toClub = await new Promise(r => services.Item.move(targetItem, ItemPile.CLUB).observe({{}}, (s, res) => r(res)));
@@ -437,6 +463,7 @@ def run_loop(tab_id, max_rounds=30, max_spend=15000, min_coins_buffer=35000, max
     recover_market_coins_and_auctions(tab_id, endpoint=endpoint)
     auto_claim_rewards(tab_id, endpoint=endpoint)
     
+    last_limit_alert_time = 0
     while rounds_done < max_rounds:
         coins = get_coins(tab_id, endpoint=endpoint)
         m_state = recover_market_coins_and_auctions(tab_id, endpoint=endpoint)
@@ -444,9 +471,11 @@ def run_loop(tab_id, max_rounds=30, max_spend=15000, min_coins_buffer=35000, max
         log(f"\n--- RONDA {rounds_done + 1}/{max_rounds} | Saldo: {coins:,} monedas (Piso: {floor_coins:,}) | Subastas Activas: {m_state['active']} ---")
         
         if coins < floor_coins:
-            log(f"Saldo ({coins:,}) alcanzó el límite permitido ({floor_coins:,}). Esperando ventas en mercado...")
-            send_telegram_alert(f"⏳ *Galería FC27:* Límite de monedas alcanzado ({coins:,} / piso {floor_coins:,}). Esperando ventas activas ({m_state['active']} en mercado) para recuperar capital.")
-            # Esperar 60 segundos antes de reintentar si hay subastas en curso
+            now = time.time()
+            if now - last_limit_alert_time > 1800:
+                send_telegram_alert(f"⏳ *Galería FC27:* Límite de monedas alcanzado ({coins:,} / piso {floor_coins:,}). Esperando ventas activas ({m_state['active']} en mercado) para recuperar capital.")
+                last_limit_alert_time = now
+            log(f"Saldo ({coins:,}) alcanzó el límite permitido ({floor_coins:,}). Esperando ventas en mercado ({m_state['active']} activas)...")
             time.sleep(60)
             continue
             
