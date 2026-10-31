@@ -2,20 +2,23 @@
 """
 fc27_gallery_worker.py — Motor Autónomo de Galería EA Sports FC™ 27 Ultimate Team (Paletools).
 
-Estrategia "Buy, Stamp & Flip" con Auto-Liquidación y Notificaciones Telegram:
-  1. Audita cartas faltantes por set prioritario vía el controlador de Galería de Paletools (_0x42b2b1).
-  2. Consulta el Mercado de Transferencias para adquirir variantes faltantes baratas (<= max_buy, default 750).
-  3. Mueve la carta al Club para estamparla permanentemente en el progreso de la Galería.
-  4. La transfiere inmediatamente a la Lista de Transferibles y la publica en venta para reciclar el 100% de las monedas.
-  5. Auto-Cobro: Reclama ventas cerradas (clearSoldItems) al inicio de cada ronda para mantener el flujo de caja.
-  6. Auto-Claim: Reclama objetivos y recompensas de hitos (claimMetaUTRewards).
-  7. Notificador Telegram: Envía alertas inmediatas al alcanzar hitos (100% de set completado o nivel superado).
-  8. Protocolo Anti-Ban estricto:
-     - Zero Focus Theft (evaluación background en DevTools, sin robar foco ni activar ventanas).
-     - Jitter gaussiano humano (3.5s a 7.5s entre acciones de mercado).
+Estrategia "Buy, Stamp & Flip" con Auto-Liquidación y Priorización de Mayor a Menor:
+  1. Ordena los sets de mayor a menor cantidad de cartas que ya tenemos en el club (trackedCount DESC).
+  2. Filtra solo sets incompletos (trackedCount < required).
+  3. Dentro de cada set prioritario, adquiere primero las cartas más baratas disponibles en el mercado (<= max_buy).
+  4. Límite de uso de monedas: Respeta un gasto máximo configurado (default: 15,000 monedas desde el inicio).
+  5. Mueve la carta adquirida al Club para estamparla permanentemente en la Galería.
+  6. La transfiere inmediatamente a la Lista de Transferibles y la pone en venta en el Mercado.
+  7. Auto-Recuperación de Monedas:
+     - Reclama automáticamente los fondos de ventas cerradas (clearSoldItems).
+     - Relista automáticamente cualquier subasta expirada (relistExpiredAuctions).
+     - Reclama objetivos y recompensas de hitos (claimMetaUTRewards).
+  8. Notificador a Telegram: Envía alertas inmediatas al completar sets al 100% o superar hitos.
+  9. Protocolo Anti-Ban estricto:
+     - Zero Focus Theft (evaluación background en pestaña DevTools).
+     - Jitter humano gaussiano (3.5s a 7.5s entre acciones).
      - Enfriamiento preventivo de 35s cada 6 búsquedas.
      - Enfriamiento de lote de 40s cada 3 compras exitosas.
-     - Detención de emergencia si el saldo toca el colchón de seguridad (default: 35,000 monedas).
 """
 
 import argparse
@@ -104,17 +107,58 @@ def get_coins(tab_id, endpoint=DEFAULT_ENDPOINT):
     res = eval_js(code, tab_id, endpoint=endpoint, timeout=10)
     return res.get("result", 0) if res.get("ok") else 0
 
-def clear_sold_items(tab_id, endpoint=DEFAULT_ENDPOINT):
+def recover_market_coins_and_auctions(tab_id, endpoint=DEFAULT_ENDPOINT):
+    """
+    Auto-Cobrador: Reclama ventas cerradas, relista subastas expiradas y devuelve estado.
+    """
     code = """
     (async () => {
+      let clearedSold = 0;
+      let relistedCount = 0;
+      
+      // 1. Cobrar ventas cerradas
       try {
-        return await new Promise(res => {
-          services.Item.clearSoldItems().observe({}, (s, r) => res(r.success));
+        const cRes = await new Promise(res => {
+          services.Item.clearSoldItems().observe({}, (s, r) => res(r));
         });
-      } catch(e) { return false; }
+        if (cRes && cRes.data && cRes.data.itemIds) {
+          clearedSold = cRes.data.itemIds.length;
+        }
+      } catch(e) {}
+      
+      // 2. Relistar subastas expiradas
+      try {
+        const rRes = await new Promise(res => {
+          services.Item.relistExpiredAuctions().observe({}, (s, r) => res(r));
+        });
+        if (rRes && rRes.data && rRes.data.itemIds) {
+          relistedCount = rRes.data.itemIds.length;
+        }
+      } catch(e) {}
+      
+      // 3. Estado de la lista de transferibles
+      let activeCount = 0;
+      try {
+        await new Promise(r => services.Item.requestTransferItems().observe({}, () => r()));
+        const items = Object.values(repositories.Item.transfer._collection || {});
+        activeCount = items.filter(i => i._auction && i._auction.tradeState === 'active').length;
+      } catch(e) {}
+      
+      return { clearedSold, relistedCount, activeCount };
     })()
     """
-    eval_js(code, tab_id, endpoint=endpoint, timeout=10)
+    res = eval_js(code, tab_id, endpoint=endpoint, timeout=15)
+    data = res.get("result") or {}
+    cleared = data.get("clearedSold", 0)
+    relisted = data.get("relistedCount", 0)
+    active = data.get("activeCount", 0)
+    
+    if cleared > 0:
+        log(f"RECAUDACIÓN DE MERCADO: {cleared} venta(s) cerrada(s) cobrada(s) exitosamente.")
+    if relisted > 0:
+        log(f"AUTO-RELIST: {relisted} carta(s) expirada(s) relistada(s) automáticamente.")
+        
+    return {"cleared": cleared, "relisted": relisted, "active": active}
 
 def auto_claim_rewards(tab_id, endpoint=DEFAULT_ENDPOINT):
     code = """
@@ -270,10 +314,10 @@ def execute_buy_and_flip_cycle(tab_id, set_info, max_buy=750, endpoint=DEFAULT_E
         log(f"Sin cartas disponibles <= {max_buy} en este momento para {set_name}.")
         return {"success": True, "candidatesFound": 0}
         
-    # Comprar la opción más barata
+    # Comprar la opción más barata disponible
     candidates.sort(key=lambda c: c["buyNow"])
     target = candidates[0]
-    log(f"Comprando carta óptima: {target['name']} (OVR {target['rating']}, DefId: {target['defId']}) por {target['buyNow']} monedas")
+    log(f"Comprando carta más barata: {target['name']} (OVR {target['rating']}, DefId: {target['defId']}) por {target['buyNow']} monedas")
     
     # 3. Comprar usando la entidad nativa
     sleep_human(2.5, 4.5)
@@ -298,7 +342,7 @@ def execute_buy_and_flip_cycle(tab_id, set_info, max_buy=750, endpoint=DEFAULT_E
     log(f"COMPRA CONFIRMADA: {target['name']} adquirida por {target['buyNow']} monedas.")
     log_tx("BUY", set_name, target["name"], target["defId"], target["buyNow"], 0, "BOUGHT")
     
-    # 4. Estampado en Club y Relistado Directo a Mercado
+    # 4. Estampado en Club y Relistado Inmediato a Mercado
     sleep_human(2.5, 4.0)
     list_price = target["buyNow"] + 50 if target["buyNow"] >= 450 else 300
     start_bid = target["buyNow"] if target["buyNow"] >= 450 else 200
@@ -336,7 +380,7 @@ def execute_buy_and_flip_cycle(tab_id, set_info, max_buy=750, endpoint=DEFAULT_E
         log(f"AUTO-LIQUIDADOR: {target['name']} listada en Mercado por {start_bid}/{list_price} monedas (recuperando saldo).")
         log_tx("LIST", set_name, target["name"], target["defId"], target["buyNow"], list_price, "ACTIVE_ON_MARKET")
     else:
-        log("Carta estampada con éxito; se reintentará reventa en la pasada periódica de liquidación.")
+        log("Carta estampada en Galería; pendiente de reventa.")
         
     # Verificar si este fichaje completó el set al 100%
     new_tracked = tracked + 1
@@ -354,10 +398,11 @@ def execute_buy_and_flip_cycle(tab_id, set_info, max_buy=750, endpoint=DEFAULT_E
         
     return {"success": True, "player": target["name"], "price": target["buyNow"], "completed": new_tracked >= req}
 
-def run_loop(tab_id, max_rounds=25, min_coins_buffer=35000, max_buy_price=750, endpoint=DEFAULT_ENDPOINT):
+def run_loop(tab_id, max_rounds=30, max_spend=15000, min_coins_buffer=35000, max_buy_price=750, endpoint=DEFAULT_ENDPOINT):
     log("==================================================================")
     log("INICIANDO MOTOR DE COMPLETADO DE GALERÍA (EA SPORTS FC 27)")
-    log(f"Configuración: Max rondas={max_rounds}, Buffer monedas={min_coins_buffer:,}, Max Buy={max_buy_price}")
+    log("ORDEN: DE MAYOR A MENOR SEGÚN CANTIDAD DE CARTAS QUE YA TENEMOS")
+    log(f"Configuración: Max rondas={max_rounds}, Límite gasto={max_spend:,}, Buffer piso={min_coins_buffer:,}, Max Buy={max_buy_price}")
     log(f"Telegram Notificaciones: {'ACTIVADAS' if TG_TOKEN and 'YOUR_TELEGRAM' not in TG_TOKEN else 'DESACTIVADAS'}")
     log("==================================================================")
     
@@ -368,23 +413,42 @@ def run_loop(tab_id, max_rounds=25, min_coins_buffer=35000, max_buy_price=750, e
     with open(CATALOG_FILE, "r", encoding="utf-8") as f:
         catalog = json.load(f)
         
-    valid_sets = [s for s in catalog if s.get("clubEaId") and s.get("required")]
-    valid_sets.sort(key=lambda s: (max(0, s.get("required", 15) - s.get("trackedCount", 0)), -s.get("trackedCount", 0)))
+    # Filtrar solo sets incompletos que tengan ID de club y requerimientos válidos
+    valid_sets = [s for s in catalog if s.get("clubEaId") and s.get("required") and s.get("trackedCount", 0) < s.get("required", 15)]
+    
+    # ORDENAMIENTO ESTRATÉGICO:
+    # 1. Mayor cantidad de cartas ya coleccionadas (de mayor a menor) -> -trackedCount
+    # 2. Menor cantidad restante para completar -> (required - trackedCount)
+    valid_sets.sort(key=lambda s: (-s.get("trackedCount", 0), s.get("required", 15) - s.get("trackedCount", 0)))
+    
+    log(f"Sets candidatos ordenados por mayor progreso ({len(valid_sets)} sets pendientes):")
+    for s in valid_sets[:8]:
+        log(f"  • {s['setName']}: {s.get('trackedCount', 0)}/{s.get('required', 15)} (Faltan: {s.get('required', 15) - s.get('trackedCount', 0)})")
+        
+    initial_coins = get_coins(tab_id, endpoint=endpoint)
+    # El piso de monedas no puede bajar de (saldo_inicial - max_spend) ni del buffer_piso
+    floor_coins = max(initial_coins - max_spend, min_coins_buffer)
+    log(f"Saldo inicial: {initial_coins:,} monedas. Piso mínimo protegido: {floor_coins:,} monedas (Límite gasto: {max_spend:,}).")
     
     rounds_done = 0
     consecutive_searches = 0
     
-    # 0. Limpieza y cobro inicial
-    clear_sold_items(tab_id, endpoint=endpoint)
+    # Cobro inicial de ventas y objetivos
+    recover_market_coins_and_auctions(tab_id, endpoint=endpoint)
     auto_claim_rewards(tab_id, endpoint=endpoint)
     
     while rounds_done < max_rounds:
         coins = get_coins(tab_id, endpoint=endpoint)
-        log(f"\n--- RONDA {rounds_done + 1}/{max_rounds} | Saldo: {coins:,} monedas ---")
-        if coins < min_coins_buffer:
-            log(f"Saldo ({coins:,}) por debajo del colchón de seguridad ({min_coins_buffer:,}). Pausando.")
-            send_telegram_alert(f"⚠️ *Alerta Galería FC27:* Saldo ({coins:,}) alcanzó el colchón de seguridad ({min_coins_buffer:,}). Motor pausado.")
-            break
+        m_state = recover_market_coins_and_auctions(tab_id, endpoint=endpoint)
+        
+        log(f"\n--- RONDA {rounds_done + 1}/{max_rounds} | Saldo: {coins:,} monedas (Piso: {floor_coins:,}) | Subastas Activas: {m_state['active']} ---")
+        
+        if coins < floor_coins:
+            log(f"Saldo ({coins:,}) alcanzó el límite permitido ({floor_coins:,}). Esperando ventas en mercado...")
+            send_telegram_alert(f"⏳ *Galería FC27:* Límite de monedas alcanzado ({coins:,} / piso {floor_coins:,}). Esperando ventas activas ({m_state['active']} en mercado) para recuperar capital.")
+            # Esperar 60 segundos antes de reintentar si hay subastas en curso
+            time.sleep(60)
+            continue
             
         action_performed = False
         for target_set in valid_sets:
@@ -401,8 +465,8 @@ def run_loop(tab_id, max_rounds=25, min_coins_buffer=35000, max_buy_price=750, e
                 target_set["trackedCount"] = tr + 1
                 action_performed = True
                 
-                # Cobrar ventas automáticamente
-                clear_sold_items(tab_id, endpoint=endpoint)
+                # Cobrar ventas inmediatamente
+                recover_market_coins_and_auctions(tab_id, endpoint=endpoint)
                 
                 log("Pausa de seguridad humana (8s) antes del siguiente objetivo...")
                 time.sleep(8)
@@ -422,30 +486,32 @@ def run_loop(tab_id, max_rounds=25, min_coins_buffer=35000, max_buy_price=750, e
         # Pausa de lote cada 3 compras exitosas
         if rounds_done > 0 and rounds_done % 3 == 0:
             log("Pausa de enfriamiento de lote (40 segundos)... Reclamando objetivos y ventas...")
-            clear_sold_items(tab_id, endpoint=endpoint)
+            recover_market_coins_and_auctions(tab_id, endpoint=endpoint)
             auto_claim_rewards(tab_id, endpoint=endpoint)
             time.sleep(40)
             
         if not action_performed and consecutive_searches >= len(valid_sets):
-            log("Se recorrieron los sets candidatos y no hay cartas <= límite. Pausando 60s...")
+            log("Se recorrieron los sets candidatos y no hay cartas baratas disponibles en este momento. Pausando 60s...")
             time.sleep(60)
             consecutive_searches = 0
             
     # Cobro final
-    clear_sold_items(tab_id, endpoint=endpoint)
+    recover_market_coins_and_auctions(tab_id, endpoint=endpoint)
     auto_claim_rewards(tab_id, endpoint=endpoint)
-    log("\nSesión finalizada. Todos los eventos registrados en data/transactions.csv")
+    final_coins = get_coins(tab_id, endpoint=endpoint)
+    log(f"\nSesión finalizada. Saldo final: {final_coins:,} monedas. Todos los eventos registrados en data/transactions.csv")
 
 def main():
     parser = argparse.ArgumentParser(description="Worker de Galería FC 27")
     parser.add_argument("--tab-id", type=int, required=True, help="Tab ID de Chrome donde corre la Web App")
-    parser.add_argument("--rounds", type=int, default=25, help="Cantidad de cartas a adquirir y rotar")
-    parser.add_argument("--max-buy", type=int, default=750, help="Precio máximo de compra")
-    parser.add_argument("--min-buffer", type=int, default=35000, help="Colchón intocable de monedas")
+    parser.add_argument("--rounds", type=int, default=30, help="Cantidad de cartas a adquirir y rotar")
+    parser.add_argument("--max-spend", type=int, default=15000, help="Límite máximo de monedas a usar del saldo inicial")
+    parser.add_argument("--min-buffer", type=int, default=35000, help="Colchón intocable absoluto de monedas")
+    parser.add_argument("--max-buy", type=int, default=750, help="Precio máximo en monedas para comprar")
     parser.add_argument("--endpoint", type=str, default=DEFAULT_ENDPOINT, help="Endpoint del bridge de Chrome")
     args = parser.parse_args()
     
-    run_loop(args.tab_id, max_rounds=args.rounds, min_coins_buffer=args.min_buffer, max_buy_price=args.max_buy, endpoint=args.endpoint)
+    run_loop(args.tab_id, max_rounds=args.rounds, max_spend=args.max_spend, min_coins_buffer=args.min_buffer, max_buy_price=args.max_buy, endpoint=args.endpoint)
 
 if __name__ == "__main__":
     main()
