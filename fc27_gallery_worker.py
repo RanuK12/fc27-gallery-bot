@@ -127,14 +127,15 @@ def recover_market_coins_and_auctions(tab_id, endpoint=DEFAULT_ENDPOINT):
         }
       } catch(e) {}
       
-      // 2. Relistar subastas expiradas
+      // 2. Relistar subastas expiradas a precio de liquidación rápida
       try {
         await new Promise(r => services.Item.requestTransferItems().observe({}, () => r()));
         const items = Object.values(repositories.Item.transfer._collection || {});
         const expired = items.filter(i => i._auction && i._auction.tradeState === 'expired');
         for (const it of expired) {
-          const bid = it._auction.startingBid || 300;
-          const buy = it._auction.buyNowPrice || 350;
+          const isGold = (it.rating || 0) >= 75;
+          const bid = isGold ? 650 : 200;
+          const buy = isGold ? 700 : 250;
           const lRes = await new Promise(r => services.Item.list(it, bid, buy, 3600).observe({}, (s, res) => r(res)));
           if (lRes && lRes.success) relistedCount++;
         }
@@ -393,9 +394,14 @@ def execute_buy_and_flip_cycle(tab_id, set_info, max_buy=750, endpoint=DEFAULT_E
         log_tx("STAMP_KEEP", set_name, target["name"], target["defId"], target["buyNow"], 0, "KEPT_IN_CLUB")
         return {"success": True, "player": target["name"], "price": target["buyNow"], "protected": True}
 
-    sleep_human(2.5, 4.0)
-    list_price = target["buyNow"] + 50 if target["buyNow"] >= 450 else 300
-    start_bid = target["buyNow"] if target["buyNow"] >= 450 else 200
+    sleep_human(1.2, 2.0)
+    # ESTRATEGIA DE LIQUIDACIÓN RÁPIDA (Ventas garantizadas para rotar monedas)
+    if (target.get("rating") or 0) >= 75:
+        start_bid = 650
+        list_price = 700 if target["buyNow"] <= 700 else min(target["buyNow"], 750)
+    else:
+        start_bid = 200
+        list_price = 250 if target["buyNow"] <= 300 else 300
     
     stamp_and_list_code = f"""
     (async () => {{
@@ -473,13 +479,14 @@ def run_loop(tab_id, max_rounds=30, max_spend=15000, min_coins_buffer=35000, max
     valid_sets = [s for s in catalog if s.get("clubEaId") and s.get("required") and s.get("trackedCount", 0) < s.get("required", 15)]
     
     # ORDENAMIENTO ESTRATÉGICO:
-    # 1. Mayor cantidad de cartas ya coleccionadas (de mayor a menor) -> -trackedCount
-    # 2. Menor cantidad restante para completar -> (required - trackedCount)
-    valid_sets.sort(key=lambda s: (-s.get("trackedCount", 0), s.get("required", 15) - s.get("trackedCount", 0)))
+    # 1. Menor cantidad restante para completar (los más cerca de cerrar al 100% primero)
+    # 2. En empate, mayor cantidad de cartas ya coleccionadas
+    valid_sets.sort(key=lambda s: (s.get("required", 15) - s.get("trackedCount", 0), -s.get("trackedCount", 0)))
     
-    log(f"Sets candidatos ordenados por mayor progreso ({len(valid_sets)} sets pendientes):")
+    log(f"Sets candidatos ordenados por CERCANÍA AL 100% ({len(valid_sets)} sets pendientes):")
     for s in valid_sets[:8]:
-        log(f"  • {s['setName']}: {s.get('trackedCount', 0)}/{s.get('required', 15)} (Faltan: {s.get('required', 15) - s.get('trackedCount', 0)})")
+        faltan = s.get('required', 15) - s.get('trackedCount', 0)
+        log(f"  • {s['setName']}: {s.get('trackedCount', 0)}/{s.get('required', 15)} (¡FALTAN SOLO {faltan} CARTAS!)")
         
     initial_coins = get_coins(tab_id, endpoint=endpoint)
     # El piso de monedas no puede bajar de (saldo_inicial - max_spend) ni del buffer_piso
@@ -528,8 +535,8 @@ def run_loop(tab_id, max_rounds=30, max_spend=15000, min_coins_buffer=35000, max
                 continue
                 
             rem = req - tr
-            # Si le faltan 1 o 2 cartas para cerrarlo al 100%, permitir hasta 1,100 monedas
-            dynamic_max_buy = 1100 if rem <= 2 else max_buy_price
+            # Si le faltan 1, 2 o 3 cartas para cerrarlo al 100%, permitir hasta 1,250 monedas para liquidarlo
+            dynamic_max_buy = 1250 if rem <= 3 else max_buy_price
             
             res = execute_buy_and_flip_cycle(tab_id, target_set, max_buy=dynamic_max_buy, endpoint=endpoint)
             active_queries += 1
