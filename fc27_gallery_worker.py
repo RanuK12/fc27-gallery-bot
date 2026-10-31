@@ -475,8 +475,15 @@ def run_loop(tab_id, max_rounds=30, max_spend=15000, min_coins_buffer=35000, max
     with open(CATALOG_FILE, "r", encoding="utf-8") as f:
         catalog = json.load(f)
         
-    # Filtrar solo sets incompletos que tengan ID de club y requerimientos válidos
-    valid_sets = [s for s in catalog if s.get("clubEaId") and s.get("required") and s.get("trackedCount", 0) < s.get("required", 15)]
+    # FILTRO ESTRICTO ANTIDESPERDICIO (Instrucción explícita de Emilio):
+    # SOLO equipos que ya tengan una base muy alta y estén a tiro de completarse al 100%.
+    # NUNCA comprar cartas para equipos con pocas cartas (ej: 2/15, 3/15, etc.).
+    valid_sets = [
+        s for s in catalog 
+        if s.get("clubEaId") and s.get("required") 
+        and s.get("trackedCount", 0) < s.get("required", 15)
+        and (s.get("required", 15) - s.get("trackedCount", 0) <= 6 or s.get("trackedCount", 0) >= 10)
+    ]
     
     # ORDENAMIENTO ESTRATÉGICO:
     # 1. Menor cantidad restante para completar (los más cerca de cerrar al 100% primero)
@@ -542,8 +549,8 @@ def run_loop(tab_id, max_rounds=30, max_spend=15000, min_coins_buffer=35000, max
             active_queries += 1
             
             if res.get("noStock"):
-                # Enfriar este set por 15 minutos para no repetir búsquedas vacías
-                set_cooldowns[s_id] = time.time() + 900
+                # Enfriar este set VIP por 2 minutos para volver a chequear si alguien publica barato
+                set_cooldowns[s_id] = time.time() + 120
                 time.sleep(1.0)
             elif res.get("success") and res.get("player"):
                 rounds_done += 1
