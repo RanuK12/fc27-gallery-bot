@@ -1,0 +1,24 @@
+# Environment & Secrets
+.env
+*.env
+telegram_config.json
+CLAVES_NUEVAS.env
+
+# Python Cache & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Operational Data & Personal Club Logs
+*.log
+transactions.csv
+data/*.json
+data/*.csv
+!data/.gitkeep
+
+# OS Artifacts
+.DS_Store
+Thumbs.db

@@ -1,0 +1,27 @@
+{
+  "bridge": {
+    "endpoint": "http://127.0.0.1:9224/command",
+    "defaultTabId": null
+  },
+  "trading": {
+    "maxBuyPrice": 750,
+    "minCoinsBuffer": 35000,
+    "relistMarkup": 50,
+    "defaultAuctionDurationSeconds": 3600
+  },
+  "antiban": {
+    "minJitterSeconds": 3.5,
+    "maxJitterSeconds": 7.5,
+    "searchesBeforeCooldown": 6,
+    "searchCooldownSeconds": 35,
+    "purchasesBeforeBatchPause": 3,
+    "batchPauseSeconds": 40
+  },
+  "notifications": {
+    "telegram": {
+      "enabled": false,
+      "botToken": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
+      "chatId": "YOUR_TELEGRAM_CHAT_ID_HERE"
+    }
+  }
+}

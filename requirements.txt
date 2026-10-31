@@ -1,0 +1,6 @@
+# Minimal dependencies for FC27 Gallery Bot
+# Compatible with Python 3.9+
+# Primary automation runs with standard library urllib and json.
+# Optional utilities:
+requests>=2.31.0
+python-dotenv>=1.0.0
