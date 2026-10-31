@@ -22,3 +22,4 @@ data/*.csv
 # OS Artifacts
 .DS_Store
 Thumbs.db
+config.json
