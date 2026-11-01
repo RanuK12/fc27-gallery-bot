@@ -160,30 +160,30 @@ def process_target_set(tab_id, target):
         const sub0 = c ? (c.childViewControllers ? c.childViewControllers[0] : null) : null;
         const activeVC = sub0 ? sub0.currentController : null;
         let curVC = activeVC;
-        if (!curVC || curVC.className !== '_0x42b2b1') {
+        if (!curVC || curVC.className !== '_0x42b2b1') {{
             const tile = document.querySelector('.ut-tile-gallery');
-            if (tile) {
-                ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(t => {
-                    tile.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
-                });
+            if (tile) {{
+                ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(t => {{
+                    tile.dispatchEvent(new MouseEvent(t, {{ bubbles: true, cancelable: true, view: window }}));
+                }});
                 await new Promise(r => setTimeout(r, 800));
-            } else {
+            }} else {{
                 const homeBtn = document.querySelector('.icon-home');
-                if (homeBtn) {
-                    ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(t => {
-                        homeBtn.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
-                    });
+                if (homeBtn) {{
+                    ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(t => {{
+                        homeBtn.dispatchEvent(new MouseEvent(t, {{ bubbles: true, cancelable: true, view: window }}));
+                    }});
                     await new Promise(r => setTimeout(r, 800));
                     const tile2 = document.querySelector('.ut-tile-gallery');
-                    if (tile2) {
-                        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(t => {
-                            tile2.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
-                        });
+                    if (tile2) {{
+                        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(t => {{
+                            tile2.dispatchEvent(new MouseEvent(t, {{ bubbles: true, cancelable: true, view: window }}));
+                        }});
                         await new Promise(r => setTimeout(r, 800));
-                    }
-                }
-            }
-        }
+                    }}
+                }}
+            }}
+        }}
         const topC = getAppMain()._rootViewController.currentController;
         const subTop = topC ? (topC.childViewControllers ? topC.childViewControllers[0] : null) : null;
         const finalVC = subTop ? subTop.currentController : null;
