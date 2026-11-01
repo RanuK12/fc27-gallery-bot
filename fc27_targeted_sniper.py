@@ -54,12 +54,12 @@ MIN_BUFFER = CONFIG.get("trading", {}).get("minCoinsBuffer", 15000)
 PROTECTED_PLAYERS = [p.lower() for p in CONFIG.get("trading", {}).get("protectedPlayers", ["yamal", "lamine", "messi", "mbappe", "vinicius", "bellingham", "rodri", "haaland", "valverde"])]
 
 TARGET_SETS = [
-    {"name": "Liverpool", "catId": 5, "setId": 46, "clubId": 9, "leagueId": None, "req": 20, "maxBuy": 1600},
-    {"name": "Atlético de Madrid", "catId": 1, "setId": 53, "clubId": 240, "leagueId": None, "req": 20, "maxBuy": 1600},
-    {"name": "Paris Saint-Germain", "catId": 2, "setId": 95, "clubId": 73, "leagueId": None, "req": 20, "maxBuy": 950},
-    {"name": "NWSL", "catId": 6, "setId": 193, "clubId": None, "leagueId": 2221, "isGold": True, "req": 30, "maxBuy": 800},
-    {"name": "Lombardia FC", "catId": 3, "setId": 107, "clubId": 131682, "leagueId": None, "req": 15, "maxBuy": 850},
-    {"name": "FC Barcelona", "catId": 1, "setId": 68, "clubId": 241, "leagueId": None, "req": 20, "maxBuy": 850},
+    {"name": "Manchester City", "catId": 5, "setId": 49, "clubId": 10, "leagueId": None, "req": 20, "maxBuy": 1000},
+    {"name": "Ligue 1 McDonald's", "catId": 6, "setId": 111, "clubId": None, "leagueId": 16, "isGold": True, "req": 30, "maxBuy": 800},
+    {"name": "FC Barcelona", "catId": 1, "setId": 68, "clubId": 241, "leagueId": None, "req": 20, "maxBuy": 1100},
+    {"name": "Bayer 04 Leverkusen", "catId": 4, "setId": 65, "clubId": 32, "leagueId": None, "req": 15, "maxBuy": 850},
+    {"name": "Manchester United", "catId": 5, "setId": 44, "clubId": 11, "leagueId": None, "req": 20, "maxBuy": 850},
+    {"name": "ROSHN Saudi Pro League", "catId": 6, "setId": 155, "clubId": None, "leagueId": 350, "isGold": True, "req": 30, "maxBuy": 750},
 ]
 
 def log(msg):
@@ -103,16 +103,21 @@ def eval_js(js_code, tab_id=DEFAULT_TAB, timeout=30):
 
 def get_coins(tab_id):
     res = eval_js("services.User.getUser().coins.amount", tab_id=tab_id, timeout=8)
-    return res.get("result", 0) if res.get("ok") else 0
+    if not res.get("ok"):
+        return 0
+    val = res.get("result")
+    try:
+        return int(val) if val is not None else 0
+    except (ValueError, TypeError):
+        return 0
 
 def recover_market_and_rewards(tab_id):
     js = """(async () => {
         let sold = 0;
         let relisted = 0;
         try {
-            const transfer = repositories.Item.transfer;
-            if (transfer && typeof transfer.cleanUpSoldAuctions === 'function') {
-                sold = await new Promise(r => services.Item.clearSoldItems().observe({}, (s, res) => r(res.success ? 1 : 0)));
+            if (services.Item && typeof services.Item.clearSoldItems === 'function') {
+                sold = await new Promise(r => services.Item.clearSoldItems().observe({}, (s, res) => r(res && res.success ? 1 : 0)));
             }
         } catch (e) {}
         try {
@@ -124,8 +129,17 @@ def recover_market_and_rewards(tab_id):
             }
         } catch (e) {}
         try {
-            if (services.Item && typeof services.Item.relistExpiredAuctions === 'function') {
-                await new Promise(r => services.Item.relistExpiredAuctions().observe({}, (s, res) => r(res)));
+            const transfer = repositories.Item.transfer;
+            const list = transfer ? Object.values(transfer._collection || {}) : [];
+            const expiredOrInactive = list.filter(i => !i._auction || i._auction.tradeState === 'expired' || i._auction.tradeState === 'inactive');
+            for (const item of expiredOrInactive) {
+                const sb = (item._auction && item._auction.startingBid) || ((item.rating || 0) >= 75 ? 650 : 200);
+                const bn = (item._auction && item._auction.buyNowPrice) || ((item.rating || 0) >= 75 ? 750 : 300);
+                try {
+                    const res = await new Promise(r => services.Item.list(item, sb, bn, 3600).observe({}, (s, res) => r(res)));
+                    if (res && res.success) relisted++;
+                } catch(e) {}
+                await new Promise(r => setTimeout(r, 400));
             }
         } catch (e) {}
         try {
@@ -140,10 +154,10 @@ def recover_market_and_rewards(tab_id):
             activeCount = list.filter(i => i._auction && i._auction.expires > 0).length;
         } catch (e) {}
         
-        return { ok: true, soldCollected: sold, activeListings: activeCount };
+        return { ok: true, soldCollected: sold, relistedCount: relisted, activeListings: activeCount };
     })()"""
-    res = eval_js(js, tab_id=tab_id, timeout=12)
-    return res.get("result", {})
+    res = eval_js(js, tab_id=tab_id, timeout=20)
+    return res.get("result", {}) or {}
 
 def process_target_set(tab_id, target):
     name = target["name"]
@@ -369,7 +383,7 @@ def process_target_set(tab_id, target):
 def run_loop(tab_id=DEFAULT_TAB, max_rounds=25):
     log("==================================================================")
     log("FRANCOTIRADOR DE ALTA PRECISIÓN - GALERÍA FC 27 INICIADO")
-    log(f"Objetivos Activos: Liverpool, Atlético de Madrid, NWSL, Lombardia, PSG, Barcelona")
+    log("Objetivos VIP: Manchester City (18/20), Ligue 1 (27/30), Barcelona (15/20), Leverkusen (7/15), Man United (8/20), Saudi (15/30)")
     log(f"Piso Protegido: {MIN_BUFFER:,} monedas | Rondas máximas: {max_rounds}")
     log("==================================================================")
     
@@ -378,10 +392,11 @@ def run_loop(tab_id=DEFAULT_TAB, max_rounds=25):
     queries_count = 0
     
     while rounds_done < max_rounds:
-        coins = get_coins(tab_id)
-        m_info = recover_market_and_rewards(tab_id)
+        coins = get_coins(tab_id) or 0
+        m_info = recover_market_and_rewards(tab_id) or {}
+        active_cnt = m_info.get("activeListings", 0) if isinstance(m_info, dict) else 0
         
-        log(f"\n--- CICLO #{rounds_done+1} | Saldo: {coins:,} monedas (Piso: {MIN_BUFFER:,}) | Subastas Activas: {m_info.get('activeListings', 0)} ---")
+        log(f"\n--- CICLO #{rounds_done+1} | Saldo: {coins:,} monedas (Piso: {MIN_BUFFER:,}) | Subastas Activas: {active_cnt} ---")
         if coins < MIN_BUFFER:
             log(f"Saldo ({coins:,}) por debajo del piso ({MIN_BUFFER:,}). Esperando ventas en mercado...")
             time.sleep(40)
@@ -426,7 +441,7 @@ def run_loop(tab_id=DEFAULT_TAB, max_rounds=25):
             time.sleep(30)
             
     recover_market_and_rewards(tab_id)
-    final_c = get_coins(tab_id)
+    final_c = get_coins(tab_id) or 0
     log(f"Francotirador finalizado. Saldo final: {final_c:,} monedas.")
 
 if __name__ == "__main__":
