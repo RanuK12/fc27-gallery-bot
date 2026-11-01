@@ -55,11 +55,10 @@ PROTECTED_PLAYERS = [p.lower() for p in CONFIG.get("trading", {}).get("protected
 
 TARGET_SETS = [
     {"name": "Liga F Moeve", "catId": 6, "setId": 121, "clubId": None, "leagueId": 2222, "isGold": False, "req": 30, "maxBuy": 800},
-    {"name": "Fulham", "catId": 5, "setId": 54, "clubId": 144, "leagueId": None, "req": 15, "maxBuy": 850},
+    {"name": "Villarreal CF", "catId": 1, "setId": 5, "clubId": 483, "leagueId": None, "req": 15, "maxBuy": 1250},
     {"name": "Newcastle United", "catId": 5, "setId": 92, "clubId": 13, "leagueId": None, "req": 15, "maxBuy": 850},
-    {"name": "Villarreal CF", "catId": 1, "setId": 5, "clubId": 483, "leagueId": None, "req": 15, "maxBuy": 850},
     {"name": "Al Hilal", "catId": 8, "setId": 190, "clubId": 605, "leagueId": None, "req": 15, "maxBuy": 850},
-    {"name": "Squad Foundations", "catId": 7, "setId": 114, "defIds": [50592897, 50412559, 50596100, 50611456, 50558033, 50406968, 50574680, 50568180, 50408064, 50604005, 50582818, 50552469], "clubId": None, "leagueId": None, "req": 4, "maxBuy": 1250},
+    {"name": "Fulham", "catId": 5, "setId": 54, "clubId": 144, "leagueId": None, "req": 15, "maxBuy": 850},
 ]
 
 def log(msg):
