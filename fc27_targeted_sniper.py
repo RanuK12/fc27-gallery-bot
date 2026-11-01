@@ -54,11 +54,13 @@ MIN_BUFFER = CONFIG.get("trading", {}).get("minCoinsBuffer", 5000)
 PROTECTED_PLAYERS = [p.lower() for p in CONFIG.get("trading", {}).get("protectedPlayers", ["yamal", "lamine", "messi", "mbappe", "vinicius", "bellingham", "rodri", "haaland", "valverde"])]
 
 TARGET_SETS = [
-    {"name": "Liga F Moeve", "catId": 6, "setId": 121, "clubId": None, "leagueId": 2222, "isGold": False, "req": 30, "maxBuy": 800},
-    {"name": "Villarreal CF", "catId": 1, "setId": 5, "clubId": 483, "leagueId": None, "req": 15, "maxBuy": 1250},
-    {"name": "Newcastle United", "catId": 5, "setId": 92, "clubId": 13, "leagueId": None, "req": 15, "maxBuy": 850},
-    {"name": "Al Hilal", "catId": 8, "setId": 190, "clubId": 605, "leagueId": None, "req": 15, "maxBuy": 850},
-    {"name": "Fulham", "catId": 5, "setId": 54, "clubId": 144, "leagueId": None, "req": 15, "maxBuy": 850},
+    {"name": "Brighton & Hove Albion", "catId": 5, "setId": 26, "clubIds": [1808, 116013], "leagueId": None, "req": 15, "maxBuy": 950},
+    {"name": "Liga F Moeve", "catId": 6, "setId": 121, "clubId": None, "leagueId": 2222, "isGold": False, "req": 30, "maxBuy": 850},
+    {"name": "FC Bayern München", "catId": 4, "setId": 52, "clubIds": [21, 115995], "leagueId": None, "req": 20, "maxBuy": 950},
+    {"name": "Newcastle United", "catId": 5, "setId": 92, "clubIds": [13], "leagueId": None, "req": 15, "maxBuy": 850},
+    {"name": "Tottenham Hotspur", "catId": 5, "setId": 8, "clubIds": [18, 116011], "leagueId": None, "req": 15, "maxBuy": 900},
+    {"name": "Al Hilal", "catId": 8, "setId": 190, "clubIds": [605], "leagueId": None, "req": 15, "maxBuy": 850},
+    {"name": "Fulham", "catId": 5, "setId": 54, "clubIds": [144], "leagueId": None, "req": 15, "maxBuy": 850},
 ]
 
 def log(msg):
@@ -249,9 +251,11 @@ def process_target_set(tab_id, target):
         send_telegram_alert(f"🏆 *¡SET COMPLETADO AL 100%!* \nEquipo: *{name}*\nProgreso: *{tracked}/{req}*\n¡Recompensas e insignias reclamadas!")
         return {"success": True, "completed": True}
         
-    # Ajuste dinámico de precio: si faltan <= 2 cartas, pagar hasta 1,250
-    if faltan <= 2:
-        max_buy = max(max_buy, 1250)
+    # Ajuste dinámico de precio para cerrar sets: si falta 1 carta, pagar hasta 1,600; si faltan 2, pagar hasta 1,350
+    if faltan == 1:
+        max_buy = max(max_buy, 1600)
+    elif faltan <= 2:
+        max_buy = max(max_buy, 1350)
         
     time.sleep(random.uniform(1.2, 2.0))
     
