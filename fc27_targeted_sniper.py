@@ -54,9 +54,11 @@ MIN_BUFFER = CONFIG.get("trading", {}).get("minCoinsBuffer", 5000)
 PROTECTED_PLAYERS = [p.lower() for p in CONFIG.get("trading", {}).get("protectedPlayers", ["yamal", "lamine", "messi", "mbappe", "vinicius", "bellingham", "rodri", "haaland", "valverde"])]
 
 TARGET_SETS = [
-    {"name": "ROSHN Saudi Pro League", "catId": 6, "setId": 155, "clubId": None, "leagueId": 350, "isGold": True, "req": 30, "maxBuy": 800},
-    {"name": "FC Barcelona", "catId": 1, "setId": 68, "clubIds": [116325, 241], "leagueId": None, "req": 20, "maxBuy": 1200},
-    {"name": "Manchester United", "catId": 5, "setId": 44, "clubId": 11, "leagueId": None, "req": 20, "maxBuy": 900},
+    {"name": "Liga F Moeve", "catId": 6, "setId": 121, "clubId": None, "leagueId": 2222, "isGold": False, "req": 30, "maxBuy": 800},
+    {"name": "Manchester United", "catId": 5, "setId": 44, "clubIds": [11, 116012], "leagueId": None, "req": 20, "maxBuy": 900},
+    {"name": "Aston Villa", "catId": 5, "setId": 61, "clubIds": [2, 116015], "leagueId": None, "req": 15, "maxBuy": 850},
+    {"name": "Everton", "catId": 5, "setId": 56, "clubIds": [7, 116016], "leagueId": None, "req": 15, "maxBuy": 850},
+    {"name": "Squad Foundations", "catId": 7, "setId": 114, "defIds": [50592897, 50412559, 50596100, 50611456, 50558033, 50406968, 50574680, 50568180, 50408064, 50604005, 50582818, 50552469], "clubId": None, "leagueId": None, "req": 4, "maxBuy": 1200},
 ]
 
 def log(msg):
@@ -89,7 +91,7 @@ def log_tx(action, set_name, player_name, def_id, buy_price, sell_price, status)
         w.writerow([now, action, set_name, player_name, def_id, buy_price, sell_price, status])
 
 def eval_js(js_code, tab_id=DEFAULT_TAB, timeout=30):
-    payload = {"action": "eval", "tabId": int(tab_id), "js": js_code, "_timeout": timeout}
+    payload = {"action": "cdp_eval", "tabId": int(tab_id), "expr": js_code, "_timeout": timeout}
     req = urllib.request.Request(ENDPOINT, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -260,10 +262,12 @@ def process_target_set(tab_id, target):
     
     eval_js("window._sniperCandidates = [];", tab_id=tab_id)
     
+    def_ids = target.get("defIds")
     for c_id in club_ids:
         level_filter = "criteria.level = 'gold';" if is_gold else ""
         club_filter = f"criteria.club = {c_id};" if c_id else ""
         league_filter = f"criteria.league = {league_id};" if league_id else ""
+        def_filter = f"criteria.defId = {json.dumps(def_ids)};" if def_ids else ""
         
         search_js = f"""(async () => {{
             services.Item.clearTransferMarketCache();
@@ -272,6 +276,7 @@ def process_target_set(tab_id, target):
             {club_filter}
             {league_filter}
             {level_filter}
+            {def_filter}
             criteria.maxBuy = {max_buy};
             criteria.count = 20;
             
