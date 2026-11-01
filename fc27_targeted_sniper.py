@@ -159,10 +159,38 @@ def process_target_set(tab_id, target):
         const c = getAppMain()._rootViewController.currentController;
         const sub0 = c ? (c.childViewControllers ? c.childViewControllers[0] : null) : null;
         const activeVC = sub0 ? sub0.currentController : null;
-        if (!activeVC || activeVC.className !== '_0x42b2b1') return {{ error: 'not_in_gallery' }};
+        let curVC = activeVC;
+        if (!curVC || curVC.className !== '_0x42b2b1') {
+            const tile = document.querySelector('.ut-tile-gallery');
+            if (tile) {
+                ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(t => {
+                    tile.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
+                });
+                await new Promise(r => setTimeout(r, 800));
+            } else {
+                const homeBtn = document.querySelector('.icon-home');
+                if (homeBtn) {
+                    ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(t => {
+                        homeBtn.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
+                    });
+                    await new Promise(r => setTimeout(r, 800));
+                    const tile2 = document.querySelector('.ut-tile-gallery');
+                    if (tile2) {
+                        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(t => {
+                            tile2.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
+                        });
+                        await new Promise(r => setTimeout(r, 800));
+                    }
+                }
+            }
+        }
+        const topC = getAppMain()._rootViewController.currentController;
+        const subTop = topC ? (topC.childViewControllers ? topC.childViewControllers[0] : null) : null;
+        const finalVC = subTop ? subTop.currentController : null;
+        if (!finalVC || finalVC.className !== '_0x42b2b1') return {{ error: 'not_in_gallery' }};
         
-        const cat = activeVC.view.category;
-        const set = activeVC.view.set;
+        const cat = finalVC.view.category;
+        const set = finalVC.view.set;
         
         if (Number(cat.getValue()) !== {cat_id}) {{
             cat.setIndexById({cat_id});
@@ -174,13 +202,13 @@ def process_target_set(tab_id, target):
         set._targets._collection.change[0].action.call(set._targets._collection.change[0].target);
         for (let i = 0; i < 25; i++) {{
             await new Promise(r => setTimeout(r, 80));
-            if (activeVC.selectedSet && activeVC.selectedSet.id === {set_id} && activeVC.albumEntries && activeVC.albumEntries.length > 0) break;
+            if (finalVC.selectedSet && finalVC.selectedSet.id === {set_id} && finalVC.albumEntries && finalVC.albumEntries.length > 0) break;
         }}
         
-        if (typeof activeVC._autoFill === 'function') activeVC._autoFill();
+        if (typeof finalVC._autoFill === 'function') finalVC._autoFill();
         
-        const sInfo = activeVC.selectedSet;
-        const entries = activeVC.albumEntries || [];
+        const sInfo = finalVC.selectedSet;
+        const entries = finalVC.albumEntries || [];
         const tracked = entries.filter(e => e.status === 'tracked');
         const missing = entries.filter(e => e.status === 'missing');
         
