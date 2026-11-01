@@ -239,10 +239,29 @@ def execute_buy_and_flip_cycle(tab_id, set_info, max_buy=750, endpoint=DEFAULT_E
     cat_id = set_info["catId"]
     club_id = set_info.get("clubEaId")
     
-    if not club_id:
-        return {"success": False, "error": "No club ID"}
+    league_id = None
+    if cat_id == 6:
+        LEAGUE_MAP = {
+            108: 13,    # Premier League
+            100: 2221,  # Barclays WSL
+            111: 16,    # Ligue 1 McDonald's
+            115: 2222,  # Arkema PL
+            109: 53,    # LALIGA EA SPORTS
+            121: 2222,  # Liga F Moeve
+            103: 31,    # Serie A Enilive
+            122: 19,    # Bundesliga
+            120: 2220,  # Frauen-Bundesliga
+            155: 350,   # ROSHN Saudi Pro League
+            173: 39,    # MLS
+            193: 2221   # NWSL
+        }
+        league_id = LEAGUE_MAP.get(set_id)
         
-    log(f"Analizando set: {set_name} (Cat: {set_info['catName']}, Club ID: {club_id}, Set ID: {set_id})")
+    if not club_id and not league_id:
+        return {"success": False, "error": "No club or league ID"}
+        
+    target_desc = f"Club ID {club_id}" if club_id else f"League ID {league_id}"
+    log(f"Analizando set: {set_name} (Cat: {set_info['catName']}, {target_desc}, Set ID: {set_id})")
     
     # 1. Obtener lista de variantes faltantes
     get_missing_code = f"""
@@ -300,7 +319,12 @@ def execute_buy_and_flip_cycle(tab_id, set_info, max_buy=750, endpoint=DEFAULT_E
       
       const criteria = new UTSearchCriteriaDTO();
       criteria.type = 'player';
-      criteria.club = {club_id};
+      if ({club_id if club_id else -1} > 0) {{
+        criteria.club = {club_id if club_id else -1};
+      }}
+      if ({league_id if league_id else -1} > 0) {{
+        criteria.league = {league_id if league_id else -1};
+      }}
       criteria.maxBuy = {max_buy};
       criteria.count = 20;
       
@@ -460,7 +484,7 @@ def execute_buy_and_flip_cycle(tab_id, set_info, max_buy=750, endpoint=DEFAULT_E
         
     return {"success": True, "player": target["name"], "price": target["buyNow"], "completed": new_tracked >= req}
 
-def run_loop(tab_id, max_rounds=30, max_spend=15000, min_coins_buffer=35000, max_buy_price=750, endpoint=DEFAULT_ENDPOINT):
+def run_loop(tab_id, max_rounds=30, max_spend=15000, min_coins_buffer=15000, max_buy_price=750, endpoint=DEFAULT_ENDPOINT):
     log("==================================================================")
     log("INICIANDO MOTOR DE COMPLETADO DE GALERÍA (EA SPORTS FC 27)")
     log("ORDEN: DE MAYOR A MENOR SEGÚN CANTIDAD DE CARTAS QUE YA TENEMOS")
@@ -480,12 +504,19 @@ def run_loop(tab_id, max_rounds=30, max_spend=15000, min_coins_buffer=35000, max
     # NUNCA comprar cartas para equipos con pocas cartas (ej: 2/15, 3/15, etc.).
     valid_sets = [
         s for s in catalog 
-        if s.get("clubEaId") and s.get("required") 
+        if (s.get("clubEaId") or s.get("catId") == 6) and s.get("required") 
         and s.get("trackedCount", 0) < s.get("required", 15)
         and (s.get("required", 15) - s.get("trackedCount", 0) <= 6 or s.get("trackedCount", 0) >= 10)
     ]
     
-    # ORDENAMIENTO ESTRATÉGICO:
+    # Deduplicar por setId
+    seen_ids = set()
+    unique_valid = []
+    for s in valid_sets:
+        if s["setId"] not in seen_ids:
+            seen_ids.add(s["setId"])
+            unique_valid.append(s)
+    valid_sets = unique_valid
     # 1. Menor cantidad restante para completar (los más cerca de cerrar al 100% primero)
     # 2. En empate, mayor cantidad de cartas ya coleccionadas
     valid_sets.sort(key=lambda s: (s.get("required", 15) - s.get("trackedCount", 0), -s.get("trackedCount", 0)))
@@ -595,7 +626,7 @@ def main():
     parser.add_argument("--tab-id", type=int, required=True, help="Tab ID de Chrome donde corre la Web App")
     parser.add_argument("--rounds", type=int, default=30, help="Cantidad de cartas a adquirir y rotar")
     parser.add_argument("--max-spend", type=int, default=15000, help="Límite máximo de monedas a usar del saldo inicial")
-    parser.add_argument("--min-buffer", type=int, default=35000, help="Colchón intocable absoluto de monedas")
+    parser.add_argument("--min-buffer", type=int, default=CONFIG.get("trading", {}).get("minCoinsBuffer", 15000), help="Colchón intocable absoluto de monedas")
     parser.add_argument("--max-buy", type=int, default=750, help="Precio máximo en monedas para comprar")
     parser.add_argument("--endpoint", type=str, default=DEFAULT_ENDPOINT, help="Endpoint del bridge de Chrome")
     args = parser.parse_args()
