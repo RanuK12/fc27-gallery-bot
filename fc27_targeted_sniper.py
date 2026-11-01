@@ -54,11 +54,11 @@ MIN_BUFFER = CONFIG.get("trading", {}).get("minCoinsBuffer", 15000)
 PROTECTED_PLAYERS = [p.lower() for p in CONFIG.get("trading", {}).get("protectedPlayers", ["yamal", "lamine", "messi", "mbappe", "vinicius", "bellingham", "rodri", "haaland", "valverde"])]
 
 TARGET_SETS = [
-    {"name": "Liverpool", "catId": 5, "setId": 46, "clubId": 9, "leagueId": None, "req": 20, "maxBuy": 1200},
-    {"name": "Atlético de Madrid", "catId": 1, "setId": 53, "clubId": 240, "leagueId": None, "req": 20, "maxBuy": 1100},
+    {"name": "Liverpool", "catId": 5, "setId": 46, "clubId": 9, "leagueId": None, "req": 20, "maxBuy": 1600},
+    {"name": "Atlético de Madrid", "catId": 1, "setId": 53, "clubId": 240, "leagueId": None, "req": 20, "maxBuy": 1600},
+    {"name": "Paris Saint-Germain", "catId": 2, "setId": 95, "clubId": 73, "leagueId": None, "req": 20, "maxBuy": 950},
     {"name": "NWSL", "catId": 6, "setId": 193, "clubId": None, "leagueId": 2221, "isGold": True, "req": 30, "maxBuy": 800},
     {"name": "Lombardia FC", "catId": 3, "setId": 107, "clubId": 131682, "leagueId": None, "req": 15, "maxBuy": 850},
-    {"name": "Paris Saint-Germain", "catId": 2, "setId": 95, "clubId": 73, "leagueId": None, "req": 20, "maxBuy": 850},
     {"name": "FC Barcelona", "catId": 1, "setId": 68, "clubId": 241, "leagueId": None, "req": 20, "maxBuy": 850},
 ]
 
