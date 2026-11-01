@@ -50,16 +50,13 @@ ENDPOINT = os.getenv("RANUKITA_EXT_ENDPOINT", CONFIG.get("bridge", {}).get("endp
 DEFAULT_TAB = CONFIG.get("bridge", {}).get("defaultTabId", 1233340013)
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", CONFIG.get("notifications", {}).get("telegram", {}).get("botToken", ""))
 TG_CHAT = os.getenv("TELEGRAM_CHAT_ID", str(CONFIG.get("notifications", {}).get("telegram", {}).get("chatId", "")))
-MIN_BUFFER = CONFIG.get("trading", {}).get("minCoinsBuffer", 15000)
+MIN_BUFFER = CONFIG.get("trading", {}).get("minCoinsBuffer", 5000)
 PROTECTED_PLAYERS = [p.lower() for p in CONFIG.get("trading", {}).get("protectedPlayers", ["yamal", "lamine", "messi", "mbappe", "vinicius", "bellingham", "rodri", "haaland", "valverde"])]
 
 TARGET_SETS = [
-    {"name": "Manchester City", "catId": 5, "setId": 49, "clubId": 10, "leagueId": None, "req": 20, "maxBuy": 1000},
-    {"name": "Ligue 1 McDonald's", "catId": 6, "setId": 111, "clubId": None, "leagueId": 16, "isGold": True, "req": 30, "maxBuy": 800},
-    {"name": "FC Barcelona", "catId": 1, "setId": 68, "clubId": 241, "leagueId": None, "req": 20, "maxBuy": 1100},
-    {"name": "Bayer 04 Leverkusen", "catId": 4, "setId": 65, "clubId": 32, "leagueId": None, "req": 15, "maxBuy": 850},
-    {"name": "Manchester United", "catId": 5, "setId": 44, "clubId": 11, "leagueId": None, "req": 20, "maxBuy": 850},
-    {"name": "ROSHN Saudi Pro League", "catId": 6, "setId": 155, "clubId": None, "leagueId": 350, "isGold": True, "req": 30, "maxBuy": 750},
+    {"name": "ROSHN Saudi Pro League", "catId": 6, "setId": 155, "clubId": None, "leagueId": 350, "isGold": True, "req": 30, "maxBuy": 800},
+    {"name": "FC Barcelona", "catId": 1, "setId": 68, "clubIds": [116325, 241], "leagueId": None, "req": 20, "maxBuy": 1200},
+    {"name": "Manchester United", "catId": 5, "setId": 44, "clubId": 11, "leagueId": None, "req": 20, "maxBuy": 900},
 ]
 
 def log(msg):
@@ -257,54 +254,64 @@ def process_target_set(tab_id, target):
     time.sleep(random.uniform(1.2, 2.0))
     
     # 2. Búsqueda en mercado de candidatos faltantes
-    level_filter = "criteria.level = 'gold';" if is_gold else ""
-    club_filter = f"criteria.club = {club_id};" if club_id else ""
-    league_filter = f"criteria.league = {league_id};" if league_id else ""
+    club_ids = target.get("clubIds") or ([club_id] if club_id else [None])
+    all_candidates = []
+    total_found = 0
     
-    search_js = f"""(async () => {{
-        services.Item.clearTransferMarketCache();
-        const criteria = new UTSearchCriteriaDTO();
-        criteria.type = 'player';
-        {club_filter}
-        {league_filter}
-        {level_filter}
-        criteria.maxBuy = {max_buy};
-        criteria.count = 20;
+    eval_js("window._sniperCandidates = [];", tab_id=tab_id)
+    
+    for c_id in club_ids:
+        level_filter = "criteria.level = 'gold';" if is_gold else ""
+        club_filter = f"criteria.club = {c_id};" if c_id else ""
+        league_filter = f"criteria.league = {league_id};" if league_id else ""
         
-        return await new Promise(resolve => {{
-            services.Item.searchTransferMarket(criteria, 1).observe({{}}, (sender, resp) => {{
-                if (resp.success) {{
-                    const missingSet = new Set({json.dumps(missing_ids)});
-                    const candidates = (resp.data.items || []).filter(i => 
-                        i._auction && i._auction.buyNowPrice > 0 && i._auction.buyNowPrice <= {max_buy} && missingSet.has(i.definitionId)
-                    );
-                    window._sniperCandidates = candidates;
-                    resolve({{
-                        success: true,
-                        totalFound: resp.data.items.length,
-                        candidates: candidates.map(c => ({{
-                            id: c.id,
-                            defId: c.definitionId,
-                            name: (c._staticData && c._staticData.name) || c.definitionId,
-                            rating: c.rating,
-                            buyNow: c._auction.buyNowPrice
-                        }}))
-                    }});
-                }} else {{
-                    resolve({{ success: false, status: resp.status }});
-                }}
+        search_js = f"""(async () => {{
+            services.Item.clearTransferMarketCache();
+            const criteria = new UTSearchCriteriaDTO();
+            criteria.type = 'player';
+            {club_filter}
+            {league_filter}
+            {level_filter}
+            criteria.maxBuy = {max_buy};
+            criteria.count = 20;
+            
+            return await new Promise(resolve => {{
+                services.Item.searchTransferMarket(criteria, 1).observe({{}}, (sender, resp) => {{
+                    if (resp.success) {{
+                        const missingSet = new Set({json.dumps(missing_ids)});
+                        const candidates = (resp.data.items || []).filter(i => 
+                            i._auction && i._auction.buyNowPrice > 0 && i._auction.buyNowPrice <= {max_buy} && missingSet.has(i.definitionId)
+                        );
+                        window._sniperCandidates = (window._sniperCandidates || []).concat(candidates);
+                        resolve({{
+                            success: true,
+                            totalFound: resp.data.items.length,
+                            candidates: candidates.map(c => ({{
+                                id: c.id,
+                                defId: c.definitionId,
+                                name: (c._staticData && c._staticData.name) || c.definitionId,
+                                rating: c.rating,
+                                buyNow: c._auction.buyNowPrice
+                            }}))
+                        }});
+                    }} else {{
+                        resolve({{ success: false, status: resp.status }});
+                    }}
+                }});
             }});
-        }});
-    }})()"""
-    s_res = eval_js(search_js, tab_id=tab_id, timeout=15)
-    s_data = s_res.get("result", {})
-    if not s_data or not s_data.get("success"):
-        log(f"Mercado sin respuesta para {name}: {s_data.get('status') if s_data else 'error'}")
-        return {"success": False, "marketError": True}
+        }})()"""
+        s_res = eval_js(search_js, tab_id=tab_id, timeout=15)
+        s_data = s_res.get("result", {})
+        if s_data and s_data.get("success"):
+            total_found += s_data.get("totalFound", 0)
+            all_candidates.extend(s_data.get("candidates", []))
+            if len(all_candidates) >= 5:
+                break
+        time.sleep(random.uniform(0.6, 1.0))
         
-    candidates = s_data.get("candidates", [])
+    candidates = all_candidates
     if not candidates:
-        log(f"Sin cartas disponibles <= {max_buy} en mercado para {name} (Encontradas {s_data.get('totalFound', 0)} no faltantes).")
+        log(f"Sin cartas disponibles <= {max_buy} en mercado para {name} (Encontradas {total_found} no faltantes).")
         return {"success": True, "noStock": True}
         
     candidates.sort(key=lambda c: c["buyNow"])
@@ -383,7 +390,7 @@ def process_target_set(tab_id, target):
 def run_loop(tab_id=DEFAULT_TAB, max_rounds=25):
     log("==================================================================")
     log("FRANCOTIRADOR DE ALTA PRECISIÓN - GALERÍA FC 27 INICIADO")
-    log("Objetivos VIP: Manchester City (18/20), Ligue 1 (27/30), Barcelona (15/20), Leverkusen (7/15), Man United (8/20), Saudi (15/30)")
+    log("Objetivos VIP: ROSHN Saudi (27/30), Barcelona (15/20), Man United (15/20)")
     log(f"Piso Protegido: {MIN_BUFFER:,} monedas | Rondas máximas: {max_rounds}")
     log("==================================================================")
     
