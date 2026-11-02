@@ -74,12 +74,10 @@ ACTIVE_SQUAD_SHIELD = [
 PROTECTED_PLAYERS = list(set([p.lower() for p in CONFIG.get("trading", {}).get("protectedPlayers", ["yamal", "lamine", "messi", "mbappe", "vinicius", "bellingham", "rodri", "haaland", "valverde"])] + ACTIVE_SQUAD_SHIELD))
 
 TARGET_SETS = [
-    {"name": "FC Bayern München", "catId": 4, "setId": 52, "clubIds": [21, 115995], "leagueId": None, "req": 20, "maxBuy": 1100},
-    {"name": "Tottenham Hotspur", "catId": 5, "setId": 8, "clubIds": [18, 116011], "leagueId": None, "req": 15, "maxBuy": 1000},
-    {"name": "Liga F Moeve", "catId": 6, "setId": 121, "clubId": None, "leagueId": 2222, "isGold": False, "req": 30, "maxBuy": 850},
-    {"name": "Newcastle United", "catId": 5, "setId": 92, "clubIds": [13], "leagueId": None, "req": 15, "maxBuy": 850},
-    {"name": "Al Hilal", "catId": 8, "setId": 190, "clubIds": [605], "leagueId": None, "req": 15, "maxBuy": 850},
-    {"name": "Fulham", "catId": 5, "setId": 54, "clubIds": [144], "leagueId": None, "req": 15, "maxBuy": 850},
+    {"name": "Liga F Moeve", "catId": 6, "setId": 121, "clubId": None, "leagueId": 2222, "isGold": False, "req": 30, "maxBuy": 900},
+    {"name": "Newcastle United", "catId": 5, "setId": 92, "clubIds": [13], "leagueId": None, "req": 15, "maxBuy": 900},
+    {"name": "Al Hilal", "catId": 8, "setId": 190, "clubIds": [605], "leagueId": None, "req": 15, "maxBuy": 900},
+    {"name": "Fulham", "catId": 5, "setId": 54, "clubIds": [144], "leagueId": None, "req": 15, "maxBuy": 900},
 ]
 
 def log(msg):
@@ -454,25 +452,25 @@ def run_loop(tab_id=DEFAULT_TAB, max_rounds=25):
             queries_count += 1
             
             if res.get("noStock"):
-                cooldowns[t_name] = time.time() + 90 # 90s cooldown para reintentar mercado
-                time.sleep(1.0)
+                cooldowns[t_name] = time.time() + 120 # 120s cooldown para reintentar mercado
+                time.sleep(2.0)
             elif res.get("bought"):
                 rounds_done += 1
                 action_in_round = True
                 recover_market_and_rewards(tab_id)
-                time.sleep(random.uniform(4.0, 6.0))
-                if rounds_done % 4 == 0:
-                    log("Pausa de rotación (20 segundos) tras 4 compras exitosas...")
+                time.sleep(random.uniform(5.5, 8.5))
+                if rounds_done % 3 == 0:
+                    log("Pausa de rotación y enfriamiento (35 segundos)...")
                     recover_market_and_rewards(tab_id)
-                    time.sleep(20)
+                    time.sleep(35)
             elif res.get("completed"):
                 cooldowns[t_name] = time.time() + 999999 # no volver a buscarlo
             else:
-                time.sleep(2.0)
+                time.sleep(3.0)
                 
-            if queries_count % 6 == 0:
-                log("Enfriamiento preventivo anti-ban (20 segundos)...")
-                time.sleep(20)
+            if queries_count % 4 == 0:
+                log("Enfriamiento preventivo anti-ban (30 segundos)...")
+                time.sleep(30)
                 
         if not action_in_round:
             log("Ronda completa de candidatos procesada. Pausando 30s...")
