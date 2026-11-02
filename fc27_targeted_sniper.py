@@ -47,18 +47,37 @@ def load_config():
 
 CONFIG = load_config()
 ENDPOINT = os.getenv("RANUKITA_EXT_ENDPOINT", CONFIG.get("bridge", {}).get("endpoint", "http://127.0.0.1:9224/command"))
-DEFAULT_TAB = CONFIG.get("bridge", {}).get("defaultTabId", 1233340013)
+
+def get_ea_tab():
+    try:
+        req = urllib.request.Request(ENDPOINT, data=json.dumps({"action": "list_tabs"}).encode("utf-8"), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            for t in data.get("tabs", []):
+                if "ea.com" in t.get("url", ""):
+                    return t["id"]
+    except Exception:
+        pass
+    return CONFIG.get("bridge", {}).get("defaultTabId", 1233340208)
+
+DEFAULT_TAB = get_ea_tab()
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", CONFIG.get("notifications", {}).get("telegram", {}).get("botToken", ""))
 TG_CHAT = os.getenv("TELEGRAM_CHAT_ID", str(CONFIG.get("notifications", {}).get("telegram", {}).get("chatId", "")))
 MIN_BUFFER = CONFIG.get("trading", {}).get("minCoinsBuffer", 5000)
-PROTECTED_PLAYERS = [p.lower() for p in CONFIG.get("trading", {}).get("protectedPlayers", ["yamal", "lamine", "messi", "mbappe", "vinicius", "bellingham", "rodri", "haaland", "valverde"])]
+
+ACTIVE_SQUAD_SHIELD = [
+    "donnarumma", "hakimi", "saliba", "van dijk", "capdevila", "touré", "toure",
+    "bellingham", "aimar", "lamine yamal", "yamal", "ferran torres", "diomande",
+    "rodman", "anyomi", "barcola", "anderson", "camavinga", "lacroix", "nkunku",
+    "matheus nunes", "doku", "spence", "barella", "delgado"
+]
+PROTECTED_PLAYERS = list(set([p.lower() for p in CONFIG.get("trading", {}).get("protectedPlayers", ["yamal", "lamine", "messi", "mbappe", "vinicius", "bellingham", "rodri", "haaland", "valverde"])] + ACTIVE_SQUAD_SHIELD))
 
 TARGET_SETS = [
-    {"name": "Brighton & Hove Albion", "catId": 5, "setId": 26, "clubIds": [1808, 116013], "leagueId": None, "req": 15, "maxBuy": 950},
+    {"name": "FC Bayern München", "catId": 4, "setId": 52, "clubIds": [21, 115995], "leagueId": None, "req": 20, "maxBuy": 1100},
+    {"name": "Tottenham Hotspur", "catId": 5, "setId": 8, "clubIds": [18, 116011], "leagueId": None, "req": 15, "maxBuy": 1000},
     {"name": "Liga F Moeve", "catId": 6, "setId": 121, "clubId": None, "leagueId": 2222, "isGold": False, "req": 30, "maxBuy": 850},
-    {"name": "FC Bayern München", "catId": 4, "setId": 52, "clubIds": [21, 115995], "leagueId": None, "req": 20, "maxBuy": 950},
     {"name": "Newcastle United", "catId": 5, "setId": 92, "clubIds": [13], "leagueId": None, "req": 15, "maxBuy": 850},
-    {"name": "Tottenham Hotspur", "catId": 5, "setId": 8, "clubIds": [18, 116011], "leagueId": None, "req": 15, "maxBuy": 900},
     {"name": "Al Hilal", "catId": 8, "setId": 190, "clubIds": [605], "leagueId": None, "req": 15, "maxBuy": 850},
     {"name": "Fulham", "catId": 5, "setId": 54, "clubIds": [144], "leagueId": None, "req": 15, "maxBuy": 850},
 ]
@@ -377,8 +396,11 @@ def process_target_set(tab_id, target):
         // 2. Mover a Transfer list
         await new Promise(r => services.Item.move(item, ItemPile.TRANSFER).observe({{}}, (s, res) => r(res)));
         // 3. Listar en mercado
-        const listRes = await new Promise(r => services.Item.list(item, {start_bid}, {list_price}, 3600).observe({{}}, (s, res) => r(res)));
-        return {{ toClub: true, listed: listRes.success }};
+        await new Promise(r => setTimeout(r, 450));
+        const minBid = (item._itemPriceLimits && item._itemPriceLimits.minimum) || {start_bid};
+        const buyNow = Math.max(minBid + 50, {list_price});
+        const listRes = await new Promise(r => services.Item.list(item, minBid, buyNow, 3600).observe({{}}, (s, res) => r(res)));
+        return {{ toClub: true, listed: listRes ? listRes.success : false, minBid: minBid, buyNow: buyNow }};
     }})()"""
     f_res = eval_js(flip_js, tab_id=tab_id, timeout=15)
     f_data = f_res.get("result", {})
