@@ -2,18 +2,24 @@
 """
 fc27_level10_engine.py — Motor de Alta Eficiencia para Galería Nivel 10 (EA Sports FC 27).
 
-Estrategia:
-1. High-ROI Gold Flipper (84-88 OVR):
-   - Compra cartas de oro accesibles al menor Buy Now del mercado.
-   - Las estampa en el Club (sumando 830 a 8,300 pts base + multiplicadores en Club y Liga).
-   - Las mueve a transferencias y las lista de inmediato al precio mínimo de mercado para rápida reventa.
-   - Pérdida neta despreciable (solo 5% de impuesto EA = 70 a 450 monedas por flip).
-2. Anti-Softban Estricto:
-   - Lectura de tracked status directamente desde IndexedDB de Paletools (0 llamadas de red).
-   - Búsqueda quirúrgica por defId + maskedDefId con clearTransferMarketCache().
-   - Jitter de 8 a 13s entre compras, cooldown de 45s cada 3 operaciones.
-   - Si las monedas bajan del buffer (15,000 monedas) o la lista de transferencias está llena,
-     espera 5 minutos (300s) monitoreando cobros automáticos (clearSoldItems) y relistados.
+Estrategia & Mejoras:
+1. Multi-Tier Buy, Stamp & Flip:
+   - Rango base: 84-87 OVR (1,200 a 9,500 monedas).
+   - Rango preferido: 88 OVR (10,000 a 17,000 monedas) — suma 8,300 pts base (Club+Liga = ~16,600 pts).
+   - Excepciones de alto puntaje: 89-90 OVR (20,000 a 36,000 monedas, ej. Harry Kane) — suma 14,000 pts base (Club+Liga = ~28,000 pts).
+2. Regla Dinámica de Liquidez (Coin Shield):
+   - Para comprar una carta de precio P, se exige: current_coins >= P + MIN_BUFFER_COINS (15,000 monedas).
+   - Nunca agota el capital; siempre preserva el colchón de seguridad.
+3. Reventa Inmediata al Mínimo de Mercado:
+   - Compra la carta más barata disponible y la lista al mismo precio (o 100 monedas menos) para venta rápida.
+   - Pérdida neta de solo 5% (EA tax = 70 a 1,600 monedas por flip).
+4. Detector Proactivo de Softban (Paletools & EA):
+   - Escaneo de DOM (toasts, alertas, banners de Paletools o EA con 'softban', 'too many requests', 'rate limit').
+   - Detección en códigos HTTP (429, 403, 461, 512, 521).
+   - Si se detecta: PAUSA TOTAL automática de enfriamiento en bloques de 15 minutos con comprobación pasiva.
+5. Ciclo de Ventas cada 5 Minutos:
+   - Si las monedas bajan de 15,000 o no hay liquidez para la siguiente carta, espera 5 minutos llamando
+     a clearSoldItems() y relistExpiredAuctions() hasta recuperar fondos.
 """
 
 import argparse
@@ -39,7 +45,7 @@ CANDIDATES_FILE = DATA_DIR / "real_gold_candidates.json"
 ENDPOINT = "http://127.0.0.1:9224/command"
 DEFAULT_TAB = 1233340559
 MIN_BUFFER_COINS = 15000
-RESUME_BUFFER_COINS = 22000
+RESUME_BUFFER_COINS = 20000
 
 # 23 Active Squad Players — INMUTABLES
 ACTIVE_SQUAD_SHIELD = [
@@ -48,22 +54,6 @@ ACTIVE_SQUAD_SHIELD = [
     "rodman", "anyomi", "barcola", "anderson", "camavinga", "lacroix", "nkunku",
     "matheus nunes", "doku", "spence", "barella", "delgado"
 ]
-
-MAX_BUY_BY_OVR = {
-    84: 1700,
-    85: 4000,
-    86: 5800,
-    87: 9200,
-    88: 14000,
-}
-
-BASE_SCORES = {
-    84: 830,
-    85: 2100,
-    86: 4100,
-    87: 5500,
-    88: 8300,
-}
 
 def log(msg):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -94,8 +84,7 @@ def eval_js(js_code, tab_id=DEFAULT_TAB, timeout=30):
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return data
+            return json.loads(resp.read().decode("utf-8"))
     except Exception as e:
         log(f"Error evaluando JS en bridge: {e}")
         return {"ok": False, "error": str(e)}
@@ -108,6 +97,84 @@ def get_coins(tab_id=DEFAULT_TAB):
         except (TypeError, ValueError):
             return 0
     return 0
+
+def check_softban(tab_id=DEFAULT_TAB):
+    """Verifica proactivamente si Paletools o EA muestran un aviso de softban en pantalla."""
+    js = """
+    (() => {
+        const textElements = Array.from(document.querySelectorAll(
+            ".ut-toast-view, .notification, .Dialog, .ea-dialog-view, .banner, .paletools-alert, .ut-notification"
+        ));
+        for (const el of textElements) {
+            const text = (el.innerText || "").toLowerCase();
+            if (
+                text.includes("softban") ||
+                text.includes("demasiadas") ||
+                text.includes("too many requests") ||
+                text.includes("rate limit") ||
+                text.includes("bloqueo temporal") ||
+                text.includes("error with your bid")
+            ) {
+                return { isSoftban: true, message: el.innerText.trim() };
+            }
+        }
+        return { isSoftban: false };
+    })()
+    """
+    res = eval_js(js, tab_id=tab_id, timeout=10)
+    if res.get("ok") and isinstance(res.get("result"), dict):
+        return res["result"]
+    return {"isSoftban": False}
+
+def enter_softban_cooloff(reason="Rate limit detectado", tab_id=DEFAULT_TAB):
+    """Pausa completa en bloques de 15 minutos hasta que el softban se levante."""
+    log("=" * 65)
+    log(f"🚨 SOFTBAN DETECTADO ({reason}).")
+    log("🛑 PAUSA TOTAL DE ENFRIAMIENTO INICIADA.")
+    log("⏳ El bot esperará 15 minutos antes de hacer una comprobación pasiva.")
+    log("=" * 65)
+
+    while True:
+        time.sleep(900)  # 15 minutos
+        log("🔍 Comprobando pasivamente si el softban continúa...")
+
+        # 1. Check DOM
+        sb = check_softban(tab_id=tab_id)
+        if sb.get("isSoftban"):
+            log(f"⚠️ Softban sigue activo en pantalla ({sb.get('message')}). Esperando otros 15 minutos...")
+            continue
+
+        # 2. Test lightweight search probe (1 search only)
+        probe_js = """
+        (async () => {
+            return new Promise(resolve => {
+                services.Item.clearTransferMarketCache();
+                const c = new UTSearchCriteriaDTO();
+                c.type = "player";
+                c.defId = [193698]; // Baumann test
+                c.maskedDefId = 193698;
+                c.count = 5;
+                services.Item.searchTransferMarket(c, 1).observe(null, (s, r) => {
+                    if (r && r.success) resolve({ ok: true });
+                    else resolve({ ok: false, status: r ? r.status : null });
+                });
+            });
+        })()
+        """
+        probe_res = eval_js(probe_js, tab_id=tab_id, timeout=15)
+        if probe_res.get("ok"):
+            probe_data = probe_res.get("result", {})
+            if isinstance(probe_data, dict) and probe_data.get("ok"):
+                log("=" * 65)
+                log("✅ ¡EL MERCADO RESPONDE NORMALMENTE! SOFTBAN LEVANTADO.")
+                log("🟢 Reanudando operaciones con ritmo seguro.")
+                log("=" * 65)
+                time.sleep(10)
+                break
+            else:
+                log(f"⚠️ Probe de mercado falló (status={probe_data.get('status')}). Continuando enfriamiento por 15 min...")
+        else:
+            log("⚠️ Error en probe. Continuando enfriamiento por 15 min...")
 
 def get_live_tracked_ids(tab_id=DEFAULT_TAB):
     js = """
@@ -173,10 +240,10 @@ def clear_sold_and_relist(tab_id=DEFAULT_TAB):
 
 def buy_stamp_and_flip(candidate, tab_id=DEFAULT_TAB):
     def_id = candidate["defId"]
-    max_buy = candidate.get("maxBuy", MAX_BUY_BY_OVR.get(candidate.get("rating", 84), 1800))
+    max_buy = candidate.get("maxBuy", 2000)
     name = candidate["name"]
     rating = candidate["rating"]
-    points_est = candidate.get("pointsEst", BASE_SCORES.get(rating, 830) * 2)
+    points_est = candidate.get("pointsEst", 2000)
 
     if any(p in name.lower() for p in ACTIVE_SQUAD_SHIELD):
         log(f"🛡️ ESCUDO ACTIVO: {name} está en el 11 titular. Omitido.")
@@ -275,8 +342,7 @@ def buy_stamp_and_flip(candidate, tab_id=DEFAULT_TAB):
     if not res.get("ok"):
         return {"ok": False, "error": res.get("error")}
     try:
-        data = json.loads(res.get("result", "{}"))
-        return data
+        return json.loads(res.get("result", "{}"))
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -286,28 +352,61 @@ def load_candidate_pool():
         return []
     with open(CANDIDATES_FILE, "r", encoding="utf-8") as f:
         pool = json.load(f)
-    # Re-order: sort by rating ascending (84, 85 first for fastest turnover, then 86, 87, 88)
-    pool.sort(key=lambda x: (x["rating"], x["baseScore"]))
     return pool
+
+def pick_best_candidate(candidates, tracked_ids, current_coins):
+    """
+    Selecciona el mejor candidato disponible respetando la regla dinámica de liquidez:
+    - current_coins >= candidate.maxBuy + MIN_BUFFER_COINS
+    - Prioriza según balance entre rating alto (10-20k, y excepciones de 30-35k) y liquidez.
+    """
+    available_to_spend = max(0, current_coins - MIN_BUFFER_COINS)
+    untracked = [c for c in candidates if c["defId"] not in tracked_ids]
+    
+    # Filter candidates we can afford while keeping MIN_BUFFER_COINS safe
+    affordable = [c for c in untracked if c.get("maxBuy", 2000) <= available_to_spend]
+    
+    if not affordable:
+        return None
+
+    # Sorting strategy:
+    # If coins > 60k: Prioritize high-impact cards (90 OVR like Kane, 88-89 OVR 10k-20k)
+    # If coins 30k-60k: Prioritize 87-88 OVR (7k-17k)
+    # If coins < 30k: Prioritize 84-86 OVR (1.2k-6k)
+    if current_coins >= 60000:
+        affordable.sort(key=lambda x: (x["rating"], x["baseScore"]), reverse=True)
+    elif current_coins >= 35000:
+        # Prefer 88 and 87 (10-18k range)
+        affordable.sort(key=lambda x: (x["rating"] in (88, 87), x["rating"]), reverse=True)
+    else:
+        # Fast turnover 84-86
+        affordable.sort(key=lambda x: (x["rating"] in (85, 86, 84), x["rating"]), reverse=True)
+    
+    return affordable[0]
 
 def run_engine(target_points=450000):
     log("=" * 65)
-    log("🚀 INICIANDO FC 27 GALLERY LEVEL 10 ENGINE")
+    log("🚀 INICIANDO FC 27 GALLERY LEVEL 10 ENGINE (v2 Multi-Tier & Softban Shield)")
     log(f"🎯 Meta: +{target_points:,} Puntos de Galería")
     log(f"🛡️ Buffer Mínimo de Monedas: {MIN_BUFFER_COINS:,}")
     log("=" * 65)
 
     all_candidates = load_candidate_pool()
-    log(f"Candidatos Oro cargados: {len(all_candidates)}")
+    log(f"Candidatos Oro (84-90 OVR) cargados: {len(all_candidates)}")
 
     accumulated_points = 0
     consecutive_buys = 0
 
     while accumulated_points < target_points:
+        # Proactive Softban Check in DOM before anything
+        sb = check_softban()
+        if sb.get("isSoftban"):
+            enter_softban_cooloff(reason=sb.get("message", "Aviso en DOM"))
+
         current_coins = get_coins()
         log(f"💰 Monedas actuales: {current_coins:,}")
 
-        # Check coin buffer
+        # Check if we can afford any purchase while preserving the buffer
         if current_coins < MIN_BUFFER_COINS:
             log(f"⚠️ Saldo por debajo del buffer ({current_coins:,} < {MIN_BUFFER_COINS:,}).")
             log("⏳ Esperando 5 minutos a que se vendan items en el mercado...")
@@ -324,14 +423,15 @@ def run_engine(target_points=450000):
         tracked_ids = get_live_tracked_ids()
         log(f"Total jugadores trackeados en Galería: {len(tracked_ids)}")
 
-        # Filter pending untracked candidates
-        pending = [c for c in all_candidates if c["defId"] not in tracked_ids]
-        if not pending:
-            log("🎉 ¡Todos los candidatos de oro cargados ya han sido trackeados!")
-            break
+        # Pick best candidate matching current wallet capacity
+        cand = pick_best_candidate(all_candidates, tracked_ids, current_coins)
+        if not cand:
+            log(f"⏳ No hay candidatos asequibles con el saldo disponible actual ({current_coins:,}).")
+            log("⏳ Esperando 5 minutos a que se libere liquidez de las ventas activas...")
+            time.sleep(300)
+            clear_sold_and_relist()
+            continue
 
-        # Pick next candidate
-        cand = pending[0]
         did = cand["defId"]
         name = cand["name"]
         rating = cand["rating"]
@@ -340,6 +440,12 @@ def run_engine(target_points=450000):
 
         log(f"🔎 Buscando: {name} ({rating} OVR, defId={did}) | MaxBuy: {max_buy:,} monedas | Pts Est: ~{pts:,}")
         res = buy_stamp_and_flip(cand)
+
+        # Check for softban in response status
+        status = res.get("status")
+        if status in (429, 403, 461, 512, 521):
+            enter_softban_cooloff(reason=f"HTTP status {status} en mercado")
+            continue
 
         if res.get("ok"):
             buy_p = res.get("buyPrice", 0)
@@ -365,14 +471,9 @@ def run_engine(target_points=450000):
         else:
             err = res.get("error", "unknown")
             log(f"⏭️ No comprado ({err}). Pasando al siguiente candidato...")
-            status = res.get("status")
-            if status in (429, 403):
-                log("🚨 Advertencia de rate limit del mercado. Pausa de seguridad de 3 minutos...")
-                time.sleep(180)
-            else:
-                all_candidates.remove(cand)
-                all_candidates.append(cand)
-                time.sleep(random.randint(4, 7))
+            all_candidates.remove(cand)
+            all_candidates.append(cand)
+            time.sleep(random.randint(4, 7))
 
     log("=" * 65)
     log(f"🏁 MOTOR FINALIZADO: +{accumulated_points:,} Puntos conseguidos!")
